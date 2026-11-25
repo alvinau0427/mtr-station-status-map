@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Noto Sans TC', 'Microsoft JhengHei', system-ui, sans-serif;
+  color: #0b2545;
+  background: #e8eef2;
+  overflow: hidden;
+}
+
+/* Prevent the browser's native image drag from interfering with map panning. */
+img {
+  -webkit-user-drag: none;
+}
+
+@layer utilities {
+  .map-shadow {
+    box-shadow: 0 10px 40px rgba(11, 37, 69, 0.18);
+  }
+}
