@@ -1,30 +1,28 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { createAggregator } from './server/aggregator.js';
 
-// The RYG line status XML feed has no CORS header, so it is fetched through
-// the dev server proxy. For production, `server/line-status-proxy.js` provides
-// the same endpoint.
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    proxy: {
-      '/api/line-status': {
-        target: 'https://tnews.mtr.com.hk',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/line-status/, '/alert/ryg_line_status.xml'),
-      },
-      // The Next Train API is publicly CORS-enabled, but its CDN occasionally
-      // omits the CORS header on throttled (429) responses. Proxying keeps the
-      // browser path consistent and lets the client retry those cases properly.
-      '/api/schedule': {
-        target: 'https://rt.data.gov.hk',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/schedule/, '/v1/transport/mtr/getSchedule.php'),
-      },
+// Dev uses the same in-memory aggregator as the production server, so local
+// development behaves exactly like the deployed app: one snapshot request per
+// client, with the upstream APIs polled slowly in the background.
+const snapshotApi = () => {
+  const aggregator = createAggregator();
+  return {
+    name: 'snapshot-api',
+    configureServer(server: { middlewares: { use: (path: string, handler: unknown) => void } }) {
+      if (process.env.VITEST) return;
+      aggregator.start();
+      server.middlewares.use('/api/snapshot', aggregator.handleSnapshot);
+      server.middlewares.use('/api/refresh', aggregator.handleRefresh);
+      server.middlewares.use('/api/full-scan', aggregator.handleFullScan);
     },
-  },
+  };
+};
+
+export default defineConfig({
+  plugins: [react(), snapshotApi()],
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'server/**/*.test.js'],
   },
 });

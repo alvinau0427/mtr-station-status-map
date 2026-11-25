@@ -32,23 +32,26 @@ The tab icon follows the worst network status: **red** (disruption), **yellow** 
 - **Journey planner (desktop)**: Dijkstra over the line topology with an interchange penalty, affected-station list, and blue rings on route stations. No connecting polylines.
 - **Station search / locate**: Chinese name, English name or station code; suggestions render in a portal dropdown with keyboard support.
 - **Station detail popover**: per-line status, next three trains in a aligned table (destination / minutes / platform), official alert link.
-- **Low-volume polling**: RYG-first adaptive plan; 0 station calls when all lines are green, 60 s cycle, 10 min full sweep, 3 min RYG cache.
-- **429 circuit breaker**: any HTTP 429 pauses all station requests for 60 s (or longer if `Retry-After` requires it).
-- **Resilience**: localStorage snapshot (trusted if <3 min), batch commits, stale-while-revalidate, failed refreshes keep last good data, ErrorBoundary fallback.
+- **Server-owned snapshot**: the Node server polls both upstream APIs once for all visitors and keeps one in-memory snapshot. Each client reads it with a single request, so the map is coloured as soon as that snapshot arrives and request volume does not grow with traffic.
+- **Low-volume polling**: RYG-first adaptive plan; 0 station calls when all lines are green and data is complete, ~2 requests/s rolling refresh (121 pairs ≈ 60 s), 10 min full sweep, 3 min RYG cache.
+- **429 handling**: one brief retry per station; on a sustained throttle the server pauses the queue but keeps (and marks stale) every observation, and repairs incomplete lines on the next cycle.
+- **Resilience**: until the first server snapshot arrives the map shows an explicit loading overlay instead of grey markers; the snapshot is prefetched before React mounts, with localStorage as a fallback; a green RYG line is painted provisionally until station data arrives; stale-while-revalidate keeps last good data, failed refreshes never blank the map, ErrorBoundary fallback.
+- **Action throttling**: repeated `refresh` / `full-scan` presses are ignored inside a 10 s / 60 s window, so user clicks cannot multiply upstream requests.
+- **Compressed snapshot**: `/api/snapshot` is gzip-encoded when the client accepts it, keeping the 10 s poll cheap on mobile connections.
 - **Dynamic favicon** built from the supplied train SVG, coloured from the app's status palette.
-- **Production server** that serves `dist/` and proxies both APIs with short-lived caches and stale-on-error behaviour.
+- **Production server** that serves `dist/`, owns the aggregator and exposes `/api/snapshot`, `/api/refresh` and `/api/full-scan`.
 - **PWA basics**: manifest, favicon and theme colour.
-- **42 unit tests** covering status inference, polling decisions, journey planning, API parsing and favicon rules.
+- **Unit tests** covering status inference, journey planning, aggregator scheduling/throttling, API parsing and favicon rules.
 
 ### UI controls
 
-- **Desktop**: drag to pan, scroll to zoom, `←/→/↑/↓` to pan, `+` / `-` to zoom, `Esc` or the target button to reset; `Update` refreshes data, `Full Scan` forces all 121 station requests.
+- **Desktop**: drag to pan, scroll to zoom, `←/→/↑/↓` to pan, `+` / `-` to zoom, `Esc` or the target button to reset; `Update` asks the server to refresh RYG plus urgent/incomplete lines, `Full Scan` asks for a full 121-pair sweep (at most once every 60 s). Both buttons show immediate busy feedback.
 - **Mobile**: one-finger pan, pinch zoom, double-tap reset, `⋯` menu for auto-refresh / full scan, floating legend toggle.
 - **Journey panel**: type or search `From` / `To`, press Enter to pick a suggestion, then `Show Route and Affected Road Sections`.
 
 ## Tech Stack
 
-React 18 · TypeScript 5 · Vite 6 · Tailwind CSS 3 · TanStack Query 5 · Zod 4 · Vitest 5 · Node.js 22 · Docker
+React 18 · TypeScript 5 · Vite 6 · Tailwind CSS 3 · Vitest 5 · Node.js 22 · Docker
 
 ## Data sources
 
@@ -57,18 +60,20 @@ React 18 · TypeScript 5 · Vite 6 · Tailwind CSS 3 · TanStack Query 5 · Zod 
 | Next Train API (DATA.GOV.HK / MTR) | `https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php` | Per-station `isdelay`, `status`, `message` and upcoming trains |
 | RYG line status feed | `https://tnews.mtr.com.hk/alert/ryg_line_status.xml` | Line-level green / yellow / red / grey and non-service hours |
 
-Both endpoints are routed through `/api/schedule` and `/api/line-status` proxies. The Next Train API normally allows CORS, but its CDN can omit the header on throttled responses, so proxying keeps behaviour consistent. The proxy caches schedules for 10 s and the RYG feed for 60 s, and serves stale content on upstream failure.
+Both endpoints are called **only by the server aggregator**. The Next Train API accepts one line/station pair per request (no batch endpoint exists), so a full sweep is 121 requests; the aggregator spaces them at ~500 ms to stay below CDN throttling thresholds. Clients never touch these endpoints directly.
 
 ### Polling strategy
 
 | Setting | Value |
 | --- | --- |
-| Normal sync cycle | 60 s |
-| RYG client cache | 180 s |
-| Full sweep | every 10 min (121 pairs) |
-| Concurrency / jitter | 5 workers, 300–800 ms |
-| Fresh cache on reload | <3 min → shown immediately, no refresh |
-| HTTP 429 | 1 retry honouring `Retry-After`, then 60 s circuit breaker |
+| Server sweep | rolling, ~2 requests/s (500 ms spacing) |
+| Client snapshot poll | every 10 s (one request per client) |
+| RYG cache | 180 s |
+| Full sweep | every 10 min (121 pairs), yellow/red lines prioritised |
+| First paint | static splash in `index.html` from the first byte; snapshot is prefetched before React mounts; loading overlay stays until RYG data arrives |
+| Action throttling | refresh ≥10 s apart, full scan ≥60 s apart; duplicate presses return the current snapshot |
+| Snapshot encoding | gzip when `Accept-Encoding: gzip` is present |
+| HTTP 429 | 1 retry per station honouring `Retry-After` (capped at 1.5 s); short server-side pause keeps every observation and marks it stale; incomplete lines repaired next cycle |
 
 ## Status inference
 
@@ -81,6 +86,7 @@ Both endpoints are routed through `/api/schedule` and `/api/line-status` proxies
 | `isdelay = N` with train data | Green — normal |
 | `isdelay = N` without trains | Grey — no trains at present |
 | RYG `grey` | Grey — non-service hours |
+| RYG `green` with no station data yet | Green — provisional first paint, replaced as soon as observations arrive |
 | Stale observation | Grey — 「Data Expired」, last known status kept in the popover |
 
 Interchange stations show one marker with the worst status among their lines.
@@ -94,9 +100,9 @@ git clone https://github.com/alvinau0427/mtr-station-status-map.git
 cd mtr-station-status-map
 npm install
 npm run dev      # http://localhost:5173 (development, HMR)
-npm test         # 42 unit tests
+npm test         # unit tests
 npm run build    # production build in dist/
-npm start        # http://localhost:8787 (built app + API proxy)
+npm start        # http://localhost:8787 (built app + server snapshot)
 ```
 
 ### Docker
@@ -106,7 +112,17 @@ docker build -t mtr-status .
 docker run -p 8787:8787 mtr-status
 ```
 
-`npm run dev` uses the Vite proxy; `npm start` uses `server/line-status-proxy.js`, which serves `dist/` and proxies `/api/*` in one process. For serverless hosting, split the two `/api` routes into functions and serve `dist/` statically.
+`npm run dev` mounts the same aggregator as a Vite middleware; `npm start` uses `server/line-status-proxy.js`, which serves `dist/`, owns the aggregator and exposes the snapshot endpoints in one process.
+
+Client-facing endpoints:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/snapshot` | Current in-memory snapshot (never blocks on upstream) |
+| `POST /api/refresh` | Force an RYG refresh plus urgent/incomplete lines (≥10 s apart), return the snapshot immediately |
+| `POST /api/full-scan` | Force a full 121-pair sweep (≥60 s apart), return the snapshot immediately |
+
+This design needs a long-lived Node process. For serverless hosting, replace the in-memory aggregator with a scheduled function that writes the snapshot to shared storage.
 
 ## Project Structure
 
@@ -114,15 +130,19 @@ docker run -p 8787:8787 mtr-status
 src/
 ├── assets/train.svg         # Train glyph for the favicon
 ├── components/              # Map, popover, toolbar, legend, journey panel, dropdown
-├── data/                    # Lines, stations, measured anchors and shapes
-├── domain/                  # Pure status inference, journey planner, polling rules
-├── hooks/useStatusSync.ts   # Polling orchestration, cache, batching, breaker UI state
-├── services/                # Next Train API client and RYG parser
+├── data/                    # Lines/stations metadata, measured anchors and shapes
+├── domain/                  # Pure status inference and journey planner
+├── hooks/useStatusSync.ts   # Snapshot polling, first-paint cache, batch commits
+├── services/snapshotApi.ts  # Server snapshot client
 ├── utils/                   # Dynamic favicon generation
 ├── App.tsx
 └── main.tsx
 public/                      # routemap.svg, favicon.svg, manifest.webmanifest
-server/line-status-proxy.js  # Static server + API proxy
+shared/lines.json            # Line/station codes shared by client and server
+server/
+├── aggregator.js            # Upstream polling, snapshot store, 429 handling
+├── aggregator.test.js
+└── line-status-proxy.js     # Static server + snapshot endpoints
 ```
 
 ## Limitations

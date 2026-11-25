@@ -8,9 +8,24 @@
     <meta name="theme-color" content="#0b2545" />
     <meta name="description" content="MTR Station Status Map — unofficial station-level service status derived from public MTR / DATA.GOV.HK data." />
     <title>港鐵車務狀況圖 | MTR Station Status Map</title>
+    <style>
+      .boot-spinner {
+        width: 16px; height: 16px; border: 2px solid #0b2545;
+        border-top-color: transparent; border-radius: 50%;
+        animation: boot-spin 0.8s linear infinite;
+      }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#e8f4fa;color:#0b2545;font:600 14px/1.4 system-ui,sans-serif">
+        <div style="display:flex;align-items:center;gap:12px;background:#fff;padding:14px 20px;border-radius:12px;box-shadow:0 4px 16px rgba(11,37,69,.15)">
+          <span class="boot-spinner"></span>
+          正在載入車務資料…
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

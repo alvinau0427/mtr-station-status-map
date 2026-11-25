@@ -107,7 +107,11 @@ export function inferStatus(
   } else if (!observation) {
     if (lineStatus === 'red') result = label('disruption', 'Line-level alert; station detail unavailable');
     else if (lineStatus === 'yellow') result = label('delay', 'Line-level alert; station detail unavailable');
-    else result = label('unknown');
+    else if (lineStatus === 'green') {
+      // Provisional first paint: RYG says the line is fine, station-level
+      // observations have not arrived yet (cold start / warming server).
+      result = label('normal', '初步判斷：等待站級資料');
+    } else result = label('unknown');
   } else if (!observation.api) {
     result = observation.error
       ? label('error', observation.error)

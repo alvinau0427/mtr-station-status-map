@@ -1,4 +1,6 @@
-/** MTR line metadata. Codes and colours follow the official Next Train API / MTR system map. */
+/** MTR line metadata, shared with the server aggregator via ../../shared/lines.json. */
+import sharedLines from '../../shared/lines.json';
+
 export interface LineInfo {
   code: string;
   nameTc: string;
@@ -7,20 +9,8 @@ export interface LineInfo {
   stations: string[];
 }
 
-export const LINES: LineInfo[] = [
-  { code: 'AEL', nameTc: '機場快線', nameEn: 'Airport Express', color: '#1C7670', stations: ["HOK", "KOW", "TSY", "AIR", "AWE"] },
-  { code: 'TCL', nameTc: '東涌線', nameEn: 'Tung Chung Line', color: '#FE7F1D', stations: ["HOK", "KOW", "OLY", "NAC", "LAK", "TSY", "SUN", "TUC"] },
-  { code: 'TML', nameTc: '屯馬線', nameEn: 'Tuen Ma Line', color: '#9A3B26', stations: ["TUM", "SIH", "TIS", "LOP", "YUL", "KSR", "TWW", "MEF", "NAC", "AUS", "ETS", "HUH", "HOM", "TKW", "SUW", "KAT", "DIH", "HIK", "TAW", "CKT", "STW", "CIO", "SHM", "TSH", "HEO", "MOS", "WKS"] },
-  { code: 'TKL', nameTc: '將軍澳線', nameEn: 'Tseung Kwan O Line', color: '#6B208B', stations: ["NOP", "QUB", "YAT", "TIK", "TKO", "LHP", "HAH", "POA"] },
-  { code: 'EAL', nameTc: '東鐵線', nameEn: 'East Rail Line', color: '#5EB6E4', stations: ["ADM", "EXC", "HUH", "MKK", "KOT", "TAW", "SHT", "FOT", "RAC", "UNI", "TAP", "TWO", "FAN", "SHS", "LOW", "LMC"] },
-  { code: 'SIL', nameTc: '南港島線', nameEn: 'South Island Line', color: '#B5BD00', stations: ["ADM", "OCP", "WCH", "LET", "SOH"] },
-  { code: 'TWL', nameTc: '荃灣線', nameEn: 'Tsuen Wan Line', color: '#FF0000', stations: ["CEN", "ADM", "TST", "JOR", "YMT", "MOK", "PRE", "SSP", "CSW", "LCK", "MEF", "LAK", "KWF", "KWH", "TWH", "TSW"] },
-  { code: 'ISL', nameTc: '港島線', nameEn: 'Island Line', color: '#0860A8', stations: ["KET", "HKU", "SYP", "SHW", "CEN", "ADM", "WAC", "CAB", "TIH", "FOH", "NOP", "QUB", "TAK", "SWH", "SKW", "HFC", "CHW"] },
-  { code: 'KTL', nameTc: '觀塘線', nameEn: 'Kwun Tong Line', color: '#1A9431', stations: ["WHA", "HOM", "YMT", "MOK", "PRE", "SKM", "KOT", "LOF", "WTS", "DIH", "CHH", "KOB", "NTK", "KWT", "LAT", "YAT", "TIK"] },
-  { code: 'DRL', nameTc: '迪士尼線', nameEn: 'Disneyland Resort Line', color: '#F550A6', stations: ["SUN", "DIS"] },
-];
+export const LINES: LineInfo[] = sharedLines as LineInfo[];
 
-export const LINE_CODES = LINES.map((line) => line.code);
 export const LINE_BY_CODE: Record<string, LineInfo> = Object.fromEntries(
   LINES.map((line) => [line.code, line])
 );

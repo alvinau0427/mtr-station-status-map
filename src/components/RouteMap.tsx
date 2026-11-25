@@ -19,11 +19,12 @@ interface Props {
   stationResults: Record<string, StatusResult>;
   journey: Journey | null;
   focusCode: string | null;
+  hasSnapshot: boolean;
 }
 
 interface Transform { scale: number; x: number; y: number }
 
-export default function RouteMap({ observations, lineStatuses, stationResults, journey, focusCode }: Props) {
+export default function RouteMap({ observations, lineStatuses, stationResults, journey, focusCode, hasSnapshot }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [transform, setTransform] = useState<Transform>({ scale: 1, x: 0, y: 0 });
   const [mapSize, setMapSize] = useState<{ width: number; height: number } | null>(null);
@@ -254,7 +255,7 @@ export default function RouteMap({ observations, lineStatuses, stationResults, j
           className="absolute inset-0 h-full w-full select-none"
           draggable={false}
         />
-        {Object.entries(STATIONS).map(([code, station]) => {
+        {hasSnapshot && Object.entries(STATIONS).map(([code, station]) => {
           const coords = STATION_COORDINATES[code];
           if (!coords) return null;
           const status = stationResults[code] ?? inferStatus(undefined, undefined);
@@ -287,6 +288,19 @@ export default function RouteMap({ observations, lineStatuses, stationResults, j
           );
         })}
       </div>
+
+      {!hasSnapshot && (
+        <div
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-[#e8f4fa]/60"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-center gap-3 rounded-xl bg-white/90 px-5 py-3 text-sm font-semibold text-ink shadow-lg ring-1 ring-slate-200">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-ink border-t-transparent" aria-hidden="true" />
+            正在載入車務資料…
+          </div>
+        </div>
+      )}
 
       <div className="pointer-events-auto absolute bottom-4 right-4 z-20 hidden gap-2 sm:flex">
         <button

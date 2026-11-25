@@ -12,15 +12,16 @@ import {
   type StatusResult,
 } from './domain/status';
 import { useStatusSync } from './hooks/useStatusSync';
+import type { Snapshot } from './services/snapshotApi';
 import { faviconDataUrl, faviconStatus } from './utils/favicon';
 
-export default function App() {
+export default function App({ initialSnapshot }: { initialSnapshot?: Snapshot }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [journey, setJourney] = useState<Journey | null>(null);
   const [focusCode, setFocusCode] = useState<string | null>(null);
   const [footerOpen, setFooterOpen] = useState(false);
 
-  const sync = useStatusSync(autoRefresh);
+  const sync = useStatusSync(autoRefresh, initialSnapshot);
 
   const observations = useMemo(() => sync.observations, [sync.observations]);
   const lineStatuses = sync.lineStatuses;
@@ -58,6 +59,7 @@ export default function App() {
     <div className="flex h-full flex-col">
       <Toolbar
         lastUpdated={sync.fetchedAt}
+        hasSnapshot={sync.hasSnapshot}
         progress={sync.progress}
         autoRefresh={autoRefresh}
         onToggleAuto={() => setAutoRefresh((v) => !v)}
@@ -76,6 +78,7 @@ export default function App() {
           stationResults={stationResults}
           journey={journey}
           focusCode={focusCode}
+          hasSnapshot={sync.hasSnapshot}
         />
         <div className="hidden sm:block">
           <JourneyPanel

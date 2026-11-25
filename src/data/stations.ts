@@ -106,5 +106,3 @@ export const STATIONS: Record<string, StationInfo> = {
   YMT: { code: 'YMT', nameTc: '油麻地', nameEn: 'Yau Ma Tei', lines: ["TWL", "KTL"] },
   YUL: { code: 'YUL', nameTc: '元朗', nameEn: 'Yuen Long', lines: ["TML"] },
 };
-
-export const STATION_CODES = Object.keys(STATIONS);

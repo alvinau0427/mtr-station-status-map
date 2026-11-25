@@ -63,6 +63,12 @@ describe('inferStatus', () => {
     expect(inferStatus(undefined, 'red').status).toBe('disruption');
   });
 
+  it('paints a green line provisionally while station data is still warming', () => {
+    const result = inferStatus(undefined, 'green');
+    expect(result.status).toBe('normal');
+    expect(result.detail).toContain('初步');
+  });
+
   it('reports fetch errors', () => {
     expect(inferStatus(obs({ api: undefined, error: 'HTTP 500' }), undefined).status).toBe('error');
   });
@@ -101,6 +107,3 @@ describe('maxHeadway', () => {
     ])).toBe(11);
   });
 });
-
-// Keep a reference to the total number of line/station pairs documented by the API.
-export const EXPECTED_MIN_STATIONS = 98;

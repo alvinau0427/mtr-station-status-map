@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 interface Props {
   lastUpdated?: string | null;
+  hasSnapshot: boolean;
   progress: { done: number; total: number };
   autoRefresh: boolean;
   onToggleAuto: () => void;
@@ -19,8 +20,17 @@ const time = (value?: string | number | null) => {
   return new Date(value).toLocaleTimeString('zh-Hant', { hour12: false });
 };
 
+function BusyLabel({ children }: { children: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />
+      {children}
+    </span>
+  );
+}
+
 export default function Toolbar({
-  lastUpdated, progress, autoRefresh, onToggleAuto, onRefresh, onFullScan,
+  lastUpdated, hasSnapshot, progress, autoRefresh, onToggleAuto, onRefresh, onFullScan,
   isFetching, error, counts, lastPlan, lastFullScanAt,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -43,9 +53,11 @@ export default function Toolbar({
         <div className="text-right text-[11px] leading-tight">
           <div className={error ? 'text-red-300' : 'text-blue-100'}>
             {error && <span className="mr-1 rounded bg-red-500/30 px-1.5 py-0.5 text-[10px]">降級模式</span>}
-            {error ?? (isFetching
-              ? syncing ? `更新中 ${progress.done}/${progress.total}` : '同步中…'
-              : '已同步')}
+            {error ?? (!hasSnapshot
+              ? '載入中…'
+              : isFetching
+                ? syncing ? `更新中 ${progress.done}/${progress.total}` : '同步中…'
+                : '已同步')}
           </div>
           <div className="hidden text-blue-200 sm:block">
             更新 {time(lastUpdated)} · 完整掃描 {time(lastFullScanAt)}
@@ -61,18 +73,19 @@ export default function Toolbar({
           type="button"
           onClick={onRefresh}
           disabled={isFetching}
-          className="rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-ink disabled:opacity-50"
+          aria-live="polite"
+          className="inline-flex min-w-[4.5rem] items-center justify-center rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-ink transition-transform active:scale-95 disabled:opacity-70"
         >
-          更新
+          {isFetching ? <BusyLabel>更新中</BusyLabel> : '更新'}
         </button>
         <button
           type="button"
           onClick={onFullScan}
           disabled={isFetching}
           title="完整掃描所有車站（約 121 個請求）"
-          className="hidden rounded-lg bg-blue-300 px-3 py-1.5 text-xs font-semibold text-ink disabled:opacity-50 sm:block"
+          className="hidden min-w-[5.5rem] items-center justify-center rounded-lg bg-blue-300 px-3 py-1.5 text-xs font-semibold text-ink transition-transform active:scale-95 disabled:opacity-70 sm:inline-flex"
         >
-          完整掃描
+          {isFetching ? <BusyLabel>掃瞄中</BusyLabel> : '完整掃描'}
         </button>
         <button
           type="button"
@@ -93,9 +106,9 @@ export default function Toolbar({
           <button
             type="button"
             onClick={() => { onFullScan(); setMenuOpen(false); }}
-            className="mt-2 w-full rounded bg-blue-100 px-2 py-1.5 font-semibold"
+            className="mt-2 w-full rounded bg-blue-100 px-2 py-1.5 font-semibold transition-transform active:scale-95"
           >
-            完整掃描
+            {isFetching ? <BusyLabel>掃瞄中</BusyLabel> : '完整掃描'}
           </button>
           <p className="mt-2 text-[10px] text-slate-500">更新 {time(lastUpdated)} · 掃描 {time(lastFullScanAt)}</p>
           <p className="mt-1 text-[10px] text-slate-500">{lastPlan}</p>

@@ -9,6 +9,7 @@ FROM node:22-alpine
 WORKDIR /app
 COPY package*.json ./
 COPY server ./server
+COPY shared ./shared
 COPY --from=build /app/dist ./dist
 ENV NODE_ENV=production
 EXPOSE 8787

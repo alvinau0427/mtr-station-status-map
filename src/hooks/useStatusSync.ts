@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LINE_BY_CODE } from '../data/lines';
-import { SCAN_INTERVAL_MS, selectLinesToScan, shouldFetchRyg } from '../domain/polling';
 import type { LineStatus, StationObservation } from '../domain/status';
-import { fetchLineStatuses } from '../services/lineStatus';
-import { fetchSchedulesForLines, rateLimitRemainingMs } from '../services/mtrApi';
+import {
+  getSnapshot,
+  requestFullScan,
+  requestRefresh,
+  type Snapshot,
+} from '../services/snapshotApi';
 
 const CACHE_KEY = 'mtr-status-cache-v2';
 const CACHE_VERSION = 2;
 const CACHE_MAX_AGE_MS = 30 * 60 * 1000;
-// Recent snapshots are trusted on restore; older ones are shown as stale and refreshed.
 const CACHE_FRESH_MS = 3 * 60 * 1000;
+const SNAPSHOT_POLL_MS = 10_000;
+const FOLLOW_UP_MS = 1_500;
 const keyOf = (line: string, code: string) => `${line}-${code}`;
 
 interface CachedSnapshot {
@@ -18,7 +21,6 @@ interface CachedSnapshot {
   lineStatuses: Record<string, LineStatus>;
   fetchedAt: string;
   lastFullScanAt: number | null;
-  rygFetchedAt: number | null;
 }
 
 function loadCache(): CachedSnapshot | null {
@@ -49,6 +51,8 @@ function saveCache(snapshot: CachedSnapshot) {
 export interface StatusSync {
   observations: Record<string, StationObservation>;
   lineStatuses: Record<string, LineStatus>;
+  /** False until the first server snapshot arrives — used to show a loading state. */
+  hasSnapshot: boolean;
   fetchedAt: string | null;
   lastFullScanAt: number | null;
   isSyncing: boolean;
@@ -59,10 +63,15 @@ export interface StatusSync {
   fullScan: () => void;
 }
 
-/** Coordinates RYG-first polling, progressive updates, caching and stale-while-revalidate. */
-export function useStatusSync(autoRefresh: boolean): StatusSync {
+/**
+ * Reads the server-owned snapshot. localStorage is only used to paint the
+ * first frame before the first snapshot arrives; the server is the sole
+ * source of truth afterwards.
+ */
+export function useStatusSync(autoRefresh: boolean, initialSnapshot?: Snapshot): StatusSync {
   const [observations, setObservations] = useState<Record<string, StationObservation>>({});
   const [lineStatuses, setLineStatuses] = useState<Record<string, LineStatus>>({});
+  const [hasSnapshot, setHasSnapshot] = useState(false);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [lastFullScanAt, setLastFullScanAt] = useState<number | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -74,12 +83,60 @@ export function useStatusSync(autoRefresh: boolean): StatusSync {
   const lineStatusesRef = useRef<Record<string, LineStatus>>({});
   const lastFullScanAtRef = useRef<number | null>(null);
   const fetchedAtRef = useRef<string | null>(null);
-  const rygFetchedAtRef = useRef<number | null>(null);
+  const busyRef = useRef(false);
+  const actionActiveRef = useRef(false);
+  const followUpRef = useRef<number | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
-  const syncingRef = useRef(false);
 
-  // Restore the previous snapshot immediately so the map is coloured on first paint.
+  const persist = useCallback(() => {
+    saveCache({
+      version: CACHE_VERSION,
+      observations: Object.values(observationsRef.current),
+      lineStatuses: lineStatusesRef.current,
+      fetchedAt: fetchedAtRef.current ?? new Date().toISOString(),
+      lastFullScanAt: lastFullScanAtRef.current,
+    });
+  }, []);
+
+  const applySnapshot = useCallback((snapshot: Snapshot) => {
+    const next = { ...observationsRef.current };
+    const incoming = new Set<string>();
+    for (const observation of snapshot.observations) {
+      const key = keyOf(observation.line, observation.code);
+      incoming.add(key);
+      next[key] = observation;
+    }
+    // Only treat locally-held stations as stale once the server has data.
+    if (snapshot.observations.length > 0) {
+      for (const key of Object.keys(next)) {
+        if (!incoming.has(key) && !next[key].stale) next[key] = { ...next[key], stale: true };
+      }
+    }
+    observationsRef.current = next;
+    lineStatusesRef.current = snapshot.lineStatuses;
+    fetchedAtRef.current = snapshot.fetchedAt ?? fetchedAtRef.current;
+    lastFullScanAtRef.current = snapshot.lastFullScanAt ?? lastFullScanAtRef.current;
+    setObservations(next);
+    setLineStatuses(snapshot.lineStatuses);
+    // Wait for RYG data before removing the overlay; an empty snapshot on a
+    // cold server would otherwise show every station as grey "loading".
+    setHasSnapshot(Object.keys(snapshot.lineStatuses).length > 0);
+    setFetchedAt(fetchedAtRef.current);
+    setLastFullScanAt(lastFullScanAtRef.current);
+    setProgress(snapshot.scan);
+    setIsSyncing(actionActiveRef.current || (snapshot.scan.total > 0 && snapshot.scan.done < snapshot.scan.total));
+    setLastPlan(snapshot.degraded ? '上游節流中 · 保留上次資料' : snapshot.lastPlan);
+    setError(snapshot.degraded ? '上游節流中，部分資料稍後更新。' : undefined);
+    persist();
+  }, [persist]);
+
+  // Use the prefetched snapshot when available (it arrived before React
+  // mounted); otherwise restore the previous snapshot for the first paint.
   useEffect(() => {
+    if (initialSnapshot) {
+      applySnapshot(initialSnapshot);
+      return;
+    }
     const cached = loadCache();
     if (!cached) return;
     const cacheAge = Date.now() - Date.parse(cached.fetchedAt);
@@ -94,128 +151,79 @@ export function useStatusSync(autoRefresh: boolean): StatusSync {
     lineStatusesRef.current = cached.lineStatuses ?? {};
     lastFullScanAtRef.current = cached.lastFullScanAt ?? null;
     fetchedAtRef.current = cached.fetchedAt ?? null;
-    rygFetchedAtRef.current = cached.rygFetchedAt ?? null;
     setObservations(restored);
     setLineStatuses(cached.lineStatuses ?? {});
     setLastFullScanAt(cached.lastFullScanAt ?? null);
     setFetchedAt(cached.fetchedAt ?? null);
-  }, []);
+  }, [initialSnapshot, applySnapshot]);
 
-  const persist = useCallback(() => {
-    saveCache({
-      version: CACHE_VERSION,
-      observations: Object.values(observationsRef.current),
-      lineStatuses: lineStatusesRef.current,
-      fetchedAt: fetchedAtRef.current ?? new Date().toISOString(),
-      lastFullScanAt: lastFullScanAtRef.current,
-      rygFetchedAt: rygFetchedAtRef.current,
-    });
-  }, []);
-
-  const sync = useCallback(async (forceFull = false) => {
-    if (syncingRef.current) return;
-    syncingRef.current = true;
-    setIsSyncing(true);
-    setError(undefined);
+  const poll = useCallback(async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     const controller = new AbortController();
     controllerRef.current = controller;
-
     try {
-      // The upstream feed only refreshes every 3 minutes; reuse it in between.
-      if (
-        Object.keys(lineStatusesRef.current).length === 0
-        || shouldFetchRyg(Date.now(), rygFetchedAtRef.current, forceFull)
-      ) {
-        const latest = await fetchLineStatuses(controller.signal);
-        lineStatusesRef.current = latest;
-        rygFetchedAtRef.current = Date.now();
-        setLineStatuses(latest);
-      }
-      const lines = lineStatusesRef.current;
-
-      const now = Date.now();
-      const plan = selectLinesToScan(lines, now, lastFullScanAtRef.current, forceFull);
-      if (plan.fullScan) {
-        lastFullScanAtRef.current = now;
-        setLastFullScanAt(now);
-      }
-
-      // Always refresh lines that still carry stale observations, even when
-      // RYG is all green and no full scan is due.
-      const staleLines = new Set(
-        Object.values(observationsRef.current)
-          .filter((observation) => observation.stale)
-          .map((observation) => observation.line),
-      );
-      const targetLines = [...new Set([...plan.lines, ...staleLines])];
-      const totalPairs = targetLines.reduce((sum, line) => sum + (LINE_BY_CODE[line]?.stations.length ?? 0), 0);
-      setProgress({ done: 0, total: totalPairs });
-      setLastPlan(plan.fullScan
-        ? `完整掃描（${targetLines.length} 條線 / ${totalPairs} 站）`
-        : targetLines.length === 0
-          ? '全線正常 · 略過站點查詢'
-          : `${staleLines.size > 0 && plan.lines.length === 0 ? '更新過期站點' : '局部更新'}（${targetLines.join(', ')} / ${totalPairs} 站）`);
-
-      if (targetLines.length > 0) {
-        const pending: Record<string, StationObservation> = {};
-        const result = await fetchSchedulesForLines(targetLines, controller.signal, (observation) => {
-          const key = keyOf(observation.line, observation.code);
-          const previous = observationsRef.current[key];
-          // Stale-while-revalidate: keep the last good payload on a failed cycle.
-          pending[key] = observation.error && previous?.api
-            ? { ...previous, stale: true, error: observation.error }
-            : observation;
-          setProgress((current) => ({ ...current, done: current.done + 1 }));
-        });
-        // Commit in one batch so the map does not change station-by-station.
-        if (Object.keys(pending).length > 0) {
-          const next = { ...observationsRef.current, ...pending };
-          observationsRef.current = next;
-          setObservations(next);
-        }
-        if (result.skipped > 0) {
-          const seconds = Math.ceil(rateLimitRemainingMs() / 1000);
-          setError(`API 節流中，已暫停站點查詢（約 ${seconds} 秒後恢復）。`);
-        } else if (result.errors > 0) {
-          setError(`本輪 ${result.errors} 個站點更新失敗，已保留上次資料。`);
-        }
-      }
-
-      const timestamp = new Date().toISOString();
-      fetchedAtRef.current = timestamp;
-      setFetchedAt(timestamp);
-      persist();
+      applySnapshot(await getSnapshot(controller.signal));
     } catch (cause) {
       if (!controller.signal.aborted) {
-        setError(cause instanceof Error ? cause.message : '同步失敗');
+        setError(cause instanceof Error ? cause.message : '無法取得伺服器資料');
       }
     } finally {
-      syncingRef.current = false;
+      busyRef.current = false;
       controllerRef.current = null;
-      setIsSyncing(false);
     }
-  }, [persist]);
+  }, [applySnapshot]);
+
+  const scheduleFollowUp = useCallback(() => {
+    if (followUpRef.current !== null) window.clearTimeout(followUpRef.current);
+    followUpRef.current = window.setTimeout(() => {
+      followUpRef.current = null;
+      actionActiveRef.current = false;
+      void poll();
+    }, FOLLOW_UP_MS);
+  }, [poll]);
+
+  const act = useCallback(async (
+    request: () => Promise<Snapshot>,
+    pendingPlan: string,
+  ) => {
+    actionActiveRef.current = true;
+    setIsSyncing(true);
+    setLastPlan(pendingPlan);
+    try {
+      applySnapshot(await request());
+    } catch (cause) {
+      actionActiveRef.current = false;
+      setError(cause instanceof Error ? cause.message : '要求更新失敗');
+      setIsSyncing(false);
+    } finally {
+      scheduleFollowUp();
+    }
+  }, [applySnapshot, scheduleFollowUp]);
 
   useEffect(() => {
-    void sync(false);
-  }, [sync]);
-
-  useEffect(() => {
+    if (!initialSnapshot) void poll();
     if (!autoRefresh) return;
-    const id = window.setInterval(() => { void sync(false); }, SCAN_INTERVAL_MS);
+    const id = window.setInterval(() => { void poll(); }, SNAPSHOT_POLL_MS);
     return () => window.clearInterval(id);
-  }, [autoRefresh, sync]);
+  }, [poll, autoRefresh, initialSnapshot]);
+
+  useEffect(() => () => {
+    if (followUpRef.current !== null) window.clearTimeout(followUpRef.current);
+    controllerRef.current?.abort();
+  }, []);
 
   return {
     observations,
     lineStatuses,
+    hasSnapshot,
     fetchedAt,
     lastFullScanAt,
     isSyncing,
     progress,
     error,
     lastPlan,
-    refresh: () => { void sync(false); },
-    fullScan: () => { void sync(true); },
+    refresh: () => { void act(requestRefresh, '已送出更新要求…'); },
+    fullScan: () => { void act(requestFullScan, '已送出完整掃瞄要求…'); },
   };
 }
