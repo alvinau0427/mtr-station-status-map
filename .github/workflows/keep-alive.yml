@@ -1,0 +1,17 @@
+name: Keep Render service awake
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the deployed app
+        run: |
+          curl --fail --silent --show-error \
+            --max-time 30 \
+            https://mtr-station-status-map.onrender.com/ > /dev/null
+          echo "Keep-alive ping succeeded"
